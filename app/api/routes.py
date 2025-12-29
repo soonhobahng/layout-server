@@ -19,8 +19,7 @@ async def health_check(request: Request):
         model_info = layout_service.get_model_info()
         
         # 모델 타입 확인
-        is_mock = isinstance(layout_service.model, type(layout_service.model)) and \
-                  layout_service.model.__class__.__name__ == 'MockLayoutModel'
+        is_mock = layout_service.model.__class__.__name__ == 'MockLayoutModel'
         
         model_name = f"{model_info['model_name']} {'(Mock)' if is_mock else '(Real)'}"
         
@@ -40,8 +39,7 @@ async def model_status(request: Request):
         model_info = layout_service.get_model_info()
         
         # 모델 상태 확인
-        is_mock = isinstance(layout_service.model, type(layout_service.model)) and \
-                  layout_service.model.__class__.__name__ == 'MockLayoutModel'
+        is_mock = layout_service.model.__class__.__name__ == 'MockLayoutModel'
         
         return {
             "model_name": model_info["model_name"],
@@ -393,7 +391,10 @@ async def debug_ocr_quality(
 ):
     """OCR 품질 디버깅을 위한 엔드포인트"""
     try:
+        logger.info(f"Debug OCR request - file type: {file.content_type}, element_index: {element_index}")
+        
         if not ImageUtils.validate_image_file(file.content_type):
+            logger.error(f"Invalid file type: {file.content_type}")
             raise HTTPException(
                 status_code=400, 
                 detail=f"Unsupported file type: {file.content_type}"
@@ -408,8 +409,10 @@ async def debug_ocr_quality(
         
         # 레이아웃 감지
         elements_data = layout_service.detect(image)
+        logger.info(f"Layout detected {len(elements_data)} elements")
         
         if element_index >= len(elements_data):
+            logger.error(f"Element index {element_index} out of range. Found {len(elements_data)} elements")
             raise HTTPException(
                 status_code=400, 
                 detail=f"Element index {element_index} out of range. Found {len(elements_data)} elements."
@@ -618,3 +621,53 @@ async def compare_ocr_engines(
     except Exception as e:
         logger.error(f"OCR comparison failed: {e}")
         raise HTTPException(status_code=500, detail=f"Comparison failed: {str(e)}")
+
+@router.post("/api/simple/test")
+async def simple_test(
+    request: Request,
+    file: UploadFile = File(...)
+):
+    """간단한 OCR 테스트"""
+    try:
+        logger.info(f"Simple test - file: {file.filename}, content_type: {file.content_type}")
+        
+        image_bytes = await file.read()
+        image = ImageUtils.load_image_from_bytes(image_bytes)
+        
+        layout_service = request.app.state.layout_service
+        ocr_service = request.app.state.ocr_service
+        
+        # 레이아웃 감지
+        elements_data = layout_service.detect(image)
+        logger.info(f"Found {len(elements_data)} elements")
+        
+        results = []
+        for i, element in enumerate(elements_data):
+            bbox_coords = element['coordinates']
+            cropped_image = ImageUtils.crop_element(image, bbox_coords)
+            element_type = element['type']
+            
+            # OCR 시도
+            logger.info(f"Starting OCR for element {i}, type: {element_type}, image size: {cropped_image.shape}")
+            content = ocr_service.extract_text(cropped_image, element_type)
+            logger.info(f"OCR result for element {i}: '{content}' (length: {len(content) if content else 0})")
+            
+            results.append({
+                "element_id": i,
+                "type": element_type,
+                "bbox": element['bbox'],
+                "content": content,
+                "content_length": len(content) if content else 0
+            })
+        
+        return {
+            "success": True,
+            "total_elements": len(elements_data),
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Simple test failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Test failed: {str(e)}")

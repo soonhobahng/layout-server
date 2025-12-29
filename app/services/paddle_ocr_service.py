@@ -18,15 +18,15 @@ class PaddleOCRService:
         try:
             from paddleocr import PaddleOCR
             
-            # 한국어 + 영어 지원
+            # 한국어 + 영어 지원 (새로운 API 사용)
             if self.lang == "korean":
                 self.ocr_engine = PaddleOCR(
-                    use_angle_cls=True, 
+                    use_textline_orientation=True,  # use_angle_cls 대신 사용
                     lang='korean'
                 )
             else:
                 self.ocr_engine = PaddleOCR(
-                    use_angle_cls=True, 
+                    use_textline_orientation=True,  # use_angle_cls 대신 사용
                     lang='en'
                 )
             
@@ -42,6 +42,8 @@ class PaddleOCRService:
     def extract_text(self, image: np.ndarray, element_type: str = "text") -> Optional[str]:
         """PaddleOCR을 사용한 텍스트 추출"""
         try:
+            logger.info(f"OCR extract_text called - element_type: {element_type}, image shape: {image.shape}")
+            
             # Lazy initialization
             if not self._initialized:
                 logger.info("Lazy loading PaddleOCR on first use...")
@@ -58,19 +60,24 @@ class PaddleOCRService:
             # 이미지 전처리
             preprocessed_image = self._preprocess_image(image, element_type)
             
-            # PaddleOCR 실행
-            results = self.ocr_engine.ocr(preprocessed_image)
+            # PaddleOCR 실행 (새로운 API 사용)
+            results = self.ocr_engine.predict(preprocessed_image)
             
-            # 결과 처리
-            extracted_text = self._process_paddle_results(results, element_type)
+            # 결과 처리 (새로운 구조에 맞게)
+            extracted_text = self._process_paddle_results_v3(results, element_type)
             
             # 텍스트 후처리
             cleaned_text = self._clean_ocr_text(extracted_text)
+            
+            logger.debug(f"OCR result for {element_type}: '{cleaned_text}' (length: {len(cleaned_text)})")
             
             return cleaned_text if cleaned_text else ""
             
         except Exception as e:
             logger.error(f"PaddleOCR failed: {e}")
+            logger.error(f"Image shape: {image.shape}, Element type: {element_type}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return ""
     
     def _preprocess_image(self, image: np.ndarray, element_type: str) -> np.ndarray:
@@ -110,9 +117,56 @@ class PaddleOCRService:
             logger.error(f"PaddleOCR preprocessing failed: {e}")
             return image
     
+    def _process_paddle_results_v3(self, results: List, element_type: str) -> str:
+        """PaddleOCR 3.3.x 결과 처리 (새로운 구조)"""
+        try:
+            if not results or len(results) == 0:
+                logger.warning(f"No OCR results for element type: {element_type}")
+                return ""
+            
+            # 새로운 구조에서 텍스트 추출
+            result = results[0] if isinstance(results, list) else results
+            
+            # rec_texts 필드에서 텍스트 추출
+            if isinstance(result, dict) and 'rec_texts' in result:
+                texts = result['rec_texts']
+                scores = result.get('rec_scores', [])
+                
+                logger.info(f"Found {len(texts)} text segments")
+                
+                # 신뢰도 필터링
+                filtered_texts = []
+                for i, text in enumerate(texts):
+                    score = scores[i] if i < len(scores) else 1.0
+                    if score > 0.3:  # 신뢰도 임계값
+                        filtered_texts.append(text)
+                        logger.debug(f"Accepted text: '{text}' (score: {score:.3f})")
+                    else:
+                        logger.debug(f"Rejected text: '{text}' (score: {score:.3f})")
+                
+                if not filtered_texts:
+                    logger.warning(f"No text passed confidence filter for {element_type}")
+                    return ""
+                
+                # 요소 타입에 따른 조합
+                if element_type == "title":
+                    return filtered_texts[0] if filtered_texts else ""
+                elif element_type == "table":
+                    return "\t".join(filtered_texts)
+                else:
+                    return "\n".join(filtered_texts)
+            else:
+                logger.warning(f"Unexpected result structure: {type(result)}")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"Error processing PaddleOCR v3 results: {e}")
+            return ""
+    
     def _process_paddle_results(self, results: List, element_type: str) -> str:
-        """PaddleOCR 결과 처리"""
+        """PaddleOCR 결과 처리 (구 버전 호환성)"""
         if not results or not results[0]:
+            logger.warning(f"No OCR results for element type: {element_type}")
             return ""
         
         # 모든 텍스트 추출
@@ -125,11 +179,15 @@ class PaddleOCRService:
                 text_info = line[1]
                 if isinstance(text_info, tuple) and len(text_info) >= 2:
                     text, confidence = text_info[0], text_info[1]
-                    if confidence > 0.5:  # 신뢰도 임계값
+                    if confidence > 0.3:  # 신뢰도 임계값을 낮춤 (0.5 -> 0.3)
                         text_lines.append(text)
                         confidences.append(confidence)
+                        logger.debug(f"OCR detected: '{text}' (confidence: {confidence:.3f})")
+                    else:
+                        logger.debug(f"OCR rejected low confidence: '{text}' (confidence: {confidence:.3f})")
         
         if not text_lines:
+            logger.warning(f"No text extracted after confidence filtering for element type: {element_type}")
             return ""
         
         # 요소 타입에 따른 텍스트 조합
@@ -179,28 +237,39 @@ class PaddleOCRService:
                 self._initialized = True
                 
             preprocessed_image = self._preprocess_image(image, "text")
-            results = self.ocr_engine.ocr(preprocessed_image)
+            results = self.ocr_engine.predict(preprocessed_image)  # 새로운 API 사용
             
             detailed_results = []
-            if results and results[0]:
-                for line in results[0]:
-                    if len(line) >= 2:
-                        bbox = line[0]  # [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
-                        text_info = line[1]  # (text, confidence)
+            if results and len(results) > 0:
+                result = results[0] if isinstance(results, list) else results
+                
+                if isinstance(result, dict):
+                    texts = result.get('rec_texts', [])
+                    scores = result.get('rec_scores', [])
+                    polys = result.get('rec_polys', [])
+                    
+                    for i, text in enumerate(texts):
+                        score = scores[i] if i < len(scores) else 1.0
+                        bbox = polys[i] if i < len(polys) else []
                         
-                        if isinstance(text_info, tuple) and len(text_info) >= 2:
-                            text, confidence = text_info[0], text_info[1]
-                            
+                        if bbox and len(bbox) >= 4:
                             detailed_results.append({
                                 "text": text,
-                                "confidence": confidence,
-                                "bbox": bbox,
+                                "confidence": score,
+                                "bbox": bbox.tolist() if hasattr(bbox, 'tolist') else bbox,
                                 "bbox_simplified": {
                                     "x1": int(min(point[0] for point in bbox)),
                                     "y1": int(min(point[1] for point in bbox)),
                                     "x2": int(max(point[0] for point in bbox)),
                                     "y2": int(max(point[1] for point in bbox))
-                                }
+                                } if len(bbox) > 0 else {}
+                            })
+                        else:
+                            detailed_results.append({
+                                "text": text,
+                                "confidence": score,
+                                "bbox": [],
+                                "bbox_simplified": {}
                             })
             
             return detailed_results
@@ -255,3 +324,78 @@ class PaddleOCRService:
         except Exception as e:
             logger.error(f"OCR comparison failed: {e}")
             return {"error": str(e)}
+    
+    def _perform_ocr(self, image: np.ndarray, element_type: str) -> str:
+        """OCR 실행 (디버깅 API용)"""
+        try:
+            if not self._initialized:
+                self._initialize_paddle_ocr()
+                self._initialized = True
+                
+            results = self.ocr_engine.predict(image)  # 새로운 API 사용
+            return self._process_paddle_results_v3(results, element_type)  # 새로운 처리 함수 사용
+        except Exception as e:
+            logger.error(f"_perform_ocr failed: {e}")
+            return ""
+    
+    def _advanced_preprocess(self, image: np.ndarray, element_type: str) -> np.ndarray:
+        """향상된 전처리 (디버깅 API용)"""
+        try:
+            # 기본 전처리 + 추가 향상
+            preprocessed = self._preprocess_image(image, element_type)
+            
+            # 추가 대비 향상
+            if len(preprocessed.shape) == 3:
+                gray = cv2.cvtColor(preprocessed, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = preprocessed
+                
+            # 적응형 히스토그램 균등화
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(gray)
+            
+            # RGB로 다시 변환
+            if len(preprocessed.shape) == 3:
+                enhanced = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2RGB)
+            
+            return enhanced
+        except Exception as e:
+            logger.error(f"Advanced preprocessing failed: {e}")
+            return image
+    
+    def _scale_first_preprocess(self, image: np.ndarray, element_type: str) -> np.ndarray:
+        """스케일 우선 전처리 (디버깅 API용)"""
+        try:
+            # 4배 확대 후 전처리
+            height, width = image.shape[:2]
+            scaled = cv2.resize(image, (width*4, height*4), interpolation=cv2.INTER_CUBIC)
+            return self._preprocess_image(scaled, element_type)
+        except Exception as e:
+            logger.error(f"Scale-first preprocessing failed: {e}")
+            return image
+    
+    def _fallback_ocr(self, image: np.ndarray, element_type: str) -> str:
+        """Fallback OCR (디버깅 API용)"""
+        try:
+            # 여러 전처리 방식으로 시도
+            methods = [
+                lambda img: img,  # 원본
+                lambda img: self._preprocess_image(img, element_type),  # 기본 전처리
+                lambda img: self._advanced_preprocess(img, element_type),  # 향상된 전처리
+                lambda img: self._scale_first_preprocess(img, element_type)  # 스케일 우선
+            ]
+            
+            best_result = ""
+            for method in methods:
+                try:
+                    processed = method(image)
+                    result = self._perform_ocr(processed, element_type)
+                    if len(result) > len(best_result):
+                        best_result = result
+                except:
+                    continue
+            
+            return best_result
+        except Exception as e:
+            logger.error(f"Fallback OCR failed: {e}")
+            return ""
