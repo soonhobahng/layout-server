@@ -6,7 +6,8 @@ FastAPI 기반 PDF/이미지 레이아웃 분석 서버입니다. 문서 이미�
 
 - **FastAPI + Uvicorn**: 고성능 웹 프레임워크
 - **layoutparser**: Detectron2 기반 레이아웃 감지
-- **pytesseract**: OCR (한글+영어 지원)
+- **PaddleOCR**: 고성능 OCR (한글 특화, 기본값)
+- **pytesseract**: 대안 OCR 엔진
 - **pdf2image**: PDF → 이미지 변환
 - **Docker**: 컨테이너화된 배포
 
@@ -15,9 +16,12 @@ FastAPI 기반 PDF/이미지 레이아웃 분석 서버입니다. 문서 이미�
 - 🖼️ 이미지 파일 레이아웃 분석 (JPG, PNG, BMP, TIFF, WebP)
 - 📄 PDF 파일 다중 페이지 분석
 - 🔍 텍스트, 제목, 리스트, 테이블, 그림 영역 감지
-- 📝 OCR을 통한 텍스트 추출 (한글+영어)
+- 📝 고성능 OCR 텍스트 추출 (PaddleOCR + Tesseract)
+- 🎯 한글 텍스트 인식 특화 (PaddleOCR)
+- 🔄 OCR 엔진 선택 가능 (PaddleOCR/Tesseract)
 - 🖼️ 테이블/그림 영역 이미지 Base64 인코딩
 - ⚙️ 신뢰도 임계값 조정 가능
+- 📊 시각화 및 디버깅 도구
 - 🚀 Docker로 쉬운 배포
 
 ## 설치 및 실행
@@ -135,6 +139,20 @@ with open('document.pdf', 'rb') as f:
 
 result = response.json()
 print(f"총 {result['total_page_count']}페이지 분석 완료")
+
+# OCR 엔진 정보 확인
+response = requests.get('http://localhost:8000/api/ocr/engines')
+print("사용 가능한 OCR 엔진:", response.json())
+
+# OCR 엔진 성능 비교
+with open('sample.png', 'rb') as f:
+    files = {'file': f}
+    response = requests.post(
+        'http://localhost:8000/api/ocr/compare',
+        files=files,
+        params={'element_index': 0}
+    )
+print("OCR 엔진 비교:", response.json())
 ```
 
 ### 응답 형식
@@ -258,7 +276,12 @@ CONFIDENCE_THRESHOLD=0.7
 # 최대 이미지 크기 (픽셀)
 MAX_IMAGE_SIZE=4096
 
-# OCR 언어 설정
+# OCR 엔진 설정
+OCR_ENGINE=paddleocr  # paddleocr 또는 tesseract
+PADDLE_OCR_LANG=korean  # PaddleOCR 언어 (korean, en, ch, etc.)
+USE_GPU_OCR=false  # GPU 사용 여부
+
+# Tesseract OCR 언어 설정 (OCR_ENGINE=tesseract인 경우)
 OCR_LANG=kor+eng
 ```
 

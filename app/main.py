@@ -8,7 +8,7 @@ import json
 
 from .api.routes import router
 from .services.layout_service import LayoutService
-from .services.ocr_service import OCRService
+from .services.ocr_factory import OCRFactory
 from .config import settings
 
 logging.basicConfig(
@@ -35,8 +35,13 @@ async def lifespan(app: FastAPI):
         app.state.layout_service = layout_service
         
         logger.info("Initializing OCR service...")
-        ocr_service = OCRService(lang=settings.ocr_lang)
+        ocr_service = OCRFactory.create_ocr_service()
         app.state.ocr_service = ocr_service
+        
+        # OCR 엔진 정보 로그
+        engine_info = OCRFactory.get_engine_info()
+        logger.info(f"OCR engine: {engine_info['current_engine']}")
+        logger.info(f"Available engines: {engine_info['available_engines']}")
         
         logger.info("Server startup complete")
         

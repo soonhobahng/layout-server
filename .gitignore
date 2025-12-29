@@ -71,3 +71,5 @@ logs/
 *.temp
 temp/
 tmp/
+tests/fixtures/02. 한화_G11_Cleverse_전환가이드_v1.4.pdf
+tests/fixtures/19b06e3897c3a3d0d.jpg
