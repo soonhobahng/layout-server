@@ -1,0 +1,8 @@
+{
+  "input_file": "./tests/fixtures/19b06e3897c3a3d0d.jpg",
+  "image_width": 594,
+  "image_height": 1076,
+  "confidence_threshold": 0.7,
+  "total_elements": 0,
+  "elements": []
+}
